@@ -9,6 +9,7 @@
 ![Version](https://img.shields.io/badge/version-1.0-green.svg)
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-☕-FFDD00?style=for-the-badge)](https://www.buymeacoffee.com/mabdulkadrx)
+
 ---
 
 ## 📖 Overview
@@ -197,5 +198,6 @@ This tool is provided **as-is**.
 * Test in staging before production
 * Ensure correct Graph permissions
 * Validate organizational compliance before deployment
+
 
 
