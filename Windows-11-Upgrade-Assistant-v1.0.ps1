@@ -1,20 +1,33 @@
 ﻿<#!
 .SYNOPSIS
-    Update workflow script for Windows 11 Assistant v1 0.
+    Launches a guided Windows 11 in-place upgrade from local installation media.
 
 .DESCRIPTION
-    This script checks and/or applies updates for Windows 11 Assistant v1 0.
-    Ensure source repositories and permissions are available.
+    Windows 11 Upgrade Assistant provides a WPF-based interface to prepare and start
+    a Windows 11 upgrade using setup.exe from a mounted ISO, USB media, or another
+    local source.
+
+    The script performs basic readiness checks, displays current device and OS details,
+    lets the operator choose from predefined setup command profiles, and builds the
+    final command line before execution.
+
+    It also supports selecting an ISO file, opening the Microsoft download page,
+    copying the planned command, and optionally prompting to relaunch Windows Setup
+    with administrator rights when elevation is required.
 
     Exit codes:
-    - Exit 0: Completed successfully
-    - Exit 1: Failed or requires further action
+    - Exit 0: The script completed or the UI was closed without a fatal error
+    - Exit 1: The script failed or could not continue
 
 .RUN AS
-    System or User (according to assignment settings and script requirements).
+    User context is supported. Administrator rights may be required by Windows Setup
+    depending on the selected action and local policy.
 
 .EXAMPLE
     .\Windows-11-Upgrade-Assistant-v1.0.ps1
+
+    Opens the upgrade assistant UI, allows you to select setup.exe or an ISO,
+    review the generated command, and start Windows Setup.
 
 .NOTES
     Author  : Mohammad Abdelkader
@@ -291,7 +304,7 @@ $xaml = @"
             <!-- Footer -->
             <Border BorderBrush="#E6EBF4" BorderThickness="0,1,0,0" Padding="14" Background="#FFFFFF">
               <StackPanel>
-                <TextBlock Name="sbFooterOrg" Text="Qassim University - IT Operations" FontSize="13" FontWeight="Bold" Foreground="#1F2D3A"/>
+                <TextBlock Name="sbFooterOrg" Text="Windows 11 Upgrade" FontSize="13" FontWeight="Bold" Foreground="#1F2D3A"/>
                 <TextBlock Name="sbFooterVersion" Text="Version 1.4" FontSize="11" Foreground="#5F6B7A" Margin="0,4,0,0"/>
                 <TextBlock FontSize="11" Foreground="#7C8BA1" Margin="0,8,0,0">
                   <Run Text="© 2025 "/>
@@ -370,7 +383,7 @@ $xaml = @"
             <TextBlock Name="tReadinessSummary" Foreground="#6B7280" TextWrapping="Wrap"/>
             <Grid Margin="0,10,0,0">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="100"/>
+                <ColumnDefinition Width="110"/>
                 <ColumnDefinition Width="*"/>
               </Grid.ColumnDefinitions>
               <Grid.RowDefinitions>
@@ -416,7 +429,6 @@ $xaml = @"
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
               </Grid.RowDefinitions>
 
               <TextBlock Name="tSetupPathLabel" Grid.Row="0" Grid.Column="0" Foreground="#111827" FontWeight="SemiBold"
@@ -427,18 +439,15 @@ $xaml = @"
               <Button Grid.Row="0" Grid.Column="2" Name="btnBrowse" Content="Browse..." Height="30" MinWidth="110" Margin="8,0,0,0" Padding="12,0"
                       Style="{StaticResource BtnGreen}" ToolTip="Browse for setup.exe on local media"/>
 
-              <TextBlock Name="tMediaStatus" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,4,0,0" Foreground="#6B7280" FontSize="12"/>
-
-              <TextBlock Name="tIsoPathLabel" Grid.Row="2" Grid.Column="0" Foreground="#111827" FontWeight="SemiBold"
+              <TextBlock Name="tIsoPathLabel" Grid.Row="1" Grid.Column="0" Foreground="#111827" FontWeight="SemiBold"
                          Margin="0,10,8,6" VerticalAlignment="Center"/>
-              <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
+              <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
                 <Button Name="btnIsoBrowse" Content="Choose ISO" Height="30" MinWidth="110" Padding="12,0"
                         Style="{StaticResource BtnGreen}" ToolTip="Select an ISO file, mount it, and fill setup.exe"/>
                 <Button Name="btnIsoDownload" Content="Download ISO" Height="30" MinWidth="170" Margin="8,0,0,0" Padding="12,0"
                         Style="{StaticResource BtnBlue}" ToolTip="Open Microsoft Windows 11 download page (official)"/>
               </StackPanel>
 
-              <TextBlock Name="tIsoStatus" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,6,0,0" Foreground="#6B7280" FontSize="12"/>
             </Grid>
             <TextBlock Foreground="#6B7280" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"
                        Text="Tip: Use Download for fresh ISO, or Browse to use a local file."/>
@@ -472,14 +481,23 @@ $xaml = @"
       </Grid>
       <Border Grid.Row="2" Margin="16,0,16,10" Padding="12" Background="#FFFFFF" BorderBrush="#DCE8F2" BorderThickness="1" CornerRadius="6">
         <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="*"/>
-          </Grid.ColumnDefinitions>
-          <TextBlock Name="tPlannedTitle" Text="Planned command" VerticalAlignment="Center"
-                     Foreground="#111827" FontWeight="SemiBold" Margin="0,2,10,0"
-                     ToolTip="Full setup.exe command that will be executed"/>
-          <TextBox Grid.Column="1" Name="tbCmd" Height="74" MinHeight="74" MaxHeight="74"
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Name="tPlannedTitle" Text="Planned command" HorizontalAlignment="left"
+                       VerticalAlignment="Center" Foreground="#111827" FontWeight="SemiBold" Margin="12,2,0,0"
+                       ToolTip="Full setup.exe command that will be executed"/>
+            <Button Grid.Column="1" Name="btnCopyCmd" Content="Copy" Height="28" Width="84" Padding="12,0" HorizontalAlignment="Right"
+                    Style="{StaticResource BtnBlue}" ToolTip="Copy the full command to the clipboard"/>
+          </Grid>
+          <TextBox Grid.Row="2" Name="tbCmd" Height="74" MinHeight="74" MaxHeight="74"
                    Background="#F3F7FF" BorderBrush="#DDE6F2" BorderThickness="1" Padding="8"
                    FontFamily="Consolas" TextWrapping="Wrap" IsReadOnly="True"
                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
@@ -492,6 +510,9 @@ $xaml = @"
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
+        <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#DCE8F2" BorderThickness="1" CornerRadius="6" Margin="0,0,12,0" Padding="12,8">
+          <TextBlock Name="tMediaStatus" Foreground="#6B7280" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        </Border>
         <Button Grid.Column="1" Name="btnClose" Content="Close" Height="36" MinWidth="120" Margin="0,0,8,0" Padding="12,0"
                 Style="{StaticResource BtnBlue}" ToolTip="Close this window"/>
         <Button Grid.Column="2" Name="btnUpgrade" Content="Start Upgrade" MinHeight="36" MinWidth="160" Padding="14,0"
@@ -554,7 +575,6 @@ $tMediaStatus= $win.FindName("tMediaStatus")
 $tIsoPathLabel = $win.FindName("tIsoPathLabel")
 $btnIsoBrowse = $win.FindName("btnIsoBrowse")
 $btnIsoDownload = $win.FindName("btnIsoDownload")
-$tIsoStatus = $win.FindName("tIsoStatus")
 $tCmdProfileTitle = $win.FindName("tCmdProfileTitle")
 $tCmdProfileHelp = $win.FindName("tCmdProfileHelp")
 $tCmdProfileDesc = $win.FindName("tCmdProfileDesc")
@@ -564,6 +584,7 @@ $tExtraArgsHelp = $win.FindName("tExtraArgsHelp")
 $ExtraArgsLink = $win.FindName("ExtraArgsLink")
 $tbExtraArgs = $win.FindName("tbExtraArgs")
 $tPlannedTitle = $win.FindName("tPlannedTitle")
+$btnCopyCmd   = $win.FindName("btnCopyCmd")
 $tbCmd       = $win.FindName("tbCmd")
 
 $btnClose    = $win.FindName("btnClose")
@@ -620,6 +641,7 @@ function Apply-Lang {
     if ($btnIsoBrowse) { $btnIsoBrowse.Content = "Choose ISO" }
     if ($btnIsoDownload) { $btnIsoDownload.Content = "ISO Download" }
     if ($tPlannedTitle) { $tPlannedTitle.Text = "Planned command" }
+    if ($btnCopyCmd) { $btnCopyCmd.Content = "Copy" }
     if ($tCmdProfileTitle) { $tCmdProfileTitle.Text = "Setup options" }
     if ($tCmdProfileHelp) { $tCmdProfileHelp.Text = "Choose a preset from the list." }
     Update-ProfileDescription
@@ -655,7 +677,7 @@ function Apply-Lang {
     if ($sbElevationLabel) { $sbElevationLabel.Text = "Elevation:" }
     if ($sbAboutTitle) { $sbAboutTitle.Text = "About this tool" }
     if ($sbAboutBody) { $sbAboutBody.Text = "Perform an in-place upgrade to Windows 11 while preserving files and applications." }
-    if ($sbFooterOrg) { $sbFooterOrg.Text = "Qassim University - IT Operations" }
+    if ($sbFooterOrg) { $sbFooterOrg.Text = "Windows 11 Upgrade" }
     if ($sbFooterVersion) { $sbFooterVersion.Text = ("Version {0}" -f $UiVersion) }
 
     if ($sessionElevationTxt) {
@@ -906,16 +928,31 @@ function Update-DeviceUI {
 }
 
 # Update setup path, command preview, and button state.
+function Set-StatusBar {
+    param(
+        [string]$Text,
+        [System.Windows.Media.Brush]$Color = $null
+    )
+    if ($tMediaStatus) {
+        $tMediaStatus.Text = $Text
+        if ($Color) {
+            $tMediaStatus.Foreground = $Color
+        } else {
+            $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::DimGray
+        }
+    }
+}
+
+# Update setup path, command preview, and button state.
 function Update-SetupState {
     $setupPath = $tbSetupPath.Text.Trim()
     $script:SetupOk = Test-SetupExePath $setupPath
 
     if ($script:SetupOk) {
-        $tMediaStatus.Text = "setup.exe selected and ready."
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::DarkGreen
+        Set-StatusBar "setup.exe selected and ready." ([System.Windows.Media.Brushes]::DarkGreen)
     } else {
-        $tMediaStatus.Text = if ([string]::IsNullOrWhiteSpace($setupPath)) { "Waiting for you to select setup.exe..." } else { "Select a valid setup.exe file." }
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::Firebrick
+        $statusText = if ([string]::IsNullOrWhiteSpace($setupPath)) { "Waiting for you to select setup.exe..." } else { "Select a valid setup.exe file." }
+        Set-StatusBar $statusText ([System.Windows.Media.Brushes]::Firebrick)
     }
 
     if ($tbSetupPath) {
@@ -944,10 +981,7 @@ function Set-IsoStatus {
         [string]$Text,
         [System.Windows.Media.Brush]$Color = $null
     )
-    if ($tIsoStatus) {
-        $tIsoStatus.Text = $Text
-        if ($Color) { $tIsoStatus.Foreground = $Color }
-    }
+    Set-StatusBar -Text $Text -Color $Color
 }
 
 # Enable/disable ISO action buttons together.
@@ -1020,13 +1054,13 @@ function Show-CustomChoiceDialog {
 
 # Open the official Microsoft Windows 11 download page.
 function Open-MicrosoftDownloadPage {
-    $url = "https://www.qu.edu.sa/mainservices/software/"
+    $url = "https://www.microsoft.com/ar-sa/software-download/windows11"
     try {
-        Set-IsoStatus "Opening QU Windows 11 download page..." ([System.Windows.Media.Brushes]::DarkSlateGray)
+        Set-IsoStatus "Opening Microsoft Windows 11 download page..." ([System.Windows.Media.Brushes]::DarkSlateGray)
         Start-Process -FilePath $url | Out-Null
-        Set-IsoStatus "QU download page opened." ([System.Windows.Media.Brushes]::DarkGreen)
+        Set-IsoStatus "Microsoft Windows 11 download page opened." ([System.Windows.Media.Brushes]::DarkGreen)
     } catch {
-        Set-IsoStatus "Failed to open QU download page." ([System.Windows.Media.Brushes]::Firebrick)
+        Set-IsoStatus "Failed to open Microsoft Windows 11 download page." ([System.Windows.Media.Brushes]::Firebrick)
     }
 }
 
@@ -1196,6 +1230,19 @@ if ($btnIsoDownload) {
     })
 }
 
+if ($btnCopyCmd) {
+    $btnCopyCmd.Add_Click({
+        try {
+            if ($tbCmd -and -not [string]::IsNullOrWhiteSpace($tbCmd.Text)) {
+                [System.Windows.Clipboard]::SetText($tbCmd.Text)
+                Set-StatusBar "Command copied to clipboard." ([System.Windows.Media.Brushes]::DarkGreen)
+            }
+        } catch {
+            Set-StatusBar "Could not copy the command to the clipboard." ([System.Windows.Media.Brushes]::Firebrick)
+        }
+    })
+}
+
 $btnBrowse.Add_Click({
     try {
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -1212,8 +1259,7 @@ $btnBrowse.Add_Click({
 $btnUpgrade.Add_Click({
     $setupPath = $tbSetupPath.Text.Trim()
     if (!(Test-SetupExePath $setupPath)) {
-        $tMediaStatus.Text = "Select a valid setup.exe file."
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::Firebrick
+        Set-StatusBar "Select a valid setup.exe file." ([System.Windows.Media.Brushes]::Firebrick)
         return
     }
 
@@ -1227,15 +1273,12 @@ $btnUpgrade.Add_Click({
     }
 
     try {
-        $tMediaStatus.Text = "Launching Windows Setup..."
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::DarkGreen
+        Set-StatusBar "Launching Windows Setup..." ([System.Windows.Media.Brushes]::DarkGreen)
         $setupArgs = Get-CombinedSetupArgs
         $null = Start-WindowsSetup -SetupPath $setupPath -SetupArgs $setupArgs -RunAs:$useRunAs
-        $tMediaStatus.Text = "Windows Setup launched. If nothing appears, check for a UAC or SmartScreen prompt."
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::DarkGreen
+        Set-StatusBar "Windows Setup launched. If nothing appears, check for a UAC or SmartScreen prompt." ([System.Windows.Media.Brushes]::DarkGreen)
     } catch {
-        $tMediaStatus.Text = (Get-LaunchErrorText $_)
-        $tMediaStatus.Foreground = [System.Windows.Media.Brushes]::Firebrick
+        Set-StatusBar (Get-LaunchErrorText $_) ([System.Windows.Media.Brushes]::Firebrick)
     }
 })
 
