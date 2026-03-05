@@ -13,7 +13,7 @@
 
 ## 📖 Overview
 
-**Windows 11 Upgrade Assistant** is a modern **WPF-based PowerShell** tool that helps IT teams run a controlled **in-place upgrade to Windows 11** while preserving **apps, files, and settings**.
+**Windows 11 Upgrade Assistant** is a modern WPF-based PowerShell tool that helps IT teams run a controlled in-place upgrade to Windows 11 while preserving apps, files, and settings — and it can remove the restrictions that block installing Windows 11 on unsupported hardware. Old PC? No TPM, no Secure Boot, unsupported CPU? It lets you install Windows 11 anyway.
 
 It provides a clean workflow to:
 
@@ -197,5 +197,6 @@ This tool is provided **as-is**.
 * Test in staging before production
 * Ensure correct Graph permissions
 * Validate organizational compliance before deployment
+
 
 
