@@ -176,27 +176,27 @@ This project is licensed under the [MIT License](https://opensource.org/licenses
 
 ## 👤 Author
 
-* **Mohammad Abdelkader**
-* Website: **momar.tech**
-* Version: **1.0**
-* Date: **2026-02-25**
+**Mohammad Abdulkader Omar**  
+Website: https://momar.tech  
+Version: **1.1**
 
 ---
 
-## ☕ Donate
+## ☕ Support
 
-If you find this project helpful, consider supporting it by  
-[buying me a coffee](https://www.buymeacoffee.com/mabdulkadrx).
+If this project helps you, consider supporting it:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-☕-FFDD00?style=for-the-badge)](https://www.buymeacoffee.com/mabdulkadrx)
 
 ---
 
 ## ⚠ Disclaimer
 
-This tool is provided **as-is**.
+This project is provided **as-is**.
 
-* Test in staging before production
-* Ensure correct Graph permissions
-* Validate organizational compliance before deployment
+- Always test scripts before production deployment.
+- Validate restart policies and user experience.
+- Ensure compatibility with your organization’s device management policies.
 
 
 
