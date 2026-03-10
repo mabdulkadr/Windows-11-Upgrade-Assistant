@@ -178,7 +178,7 @@ This project is licensed under the [MIT License](https://opensource.org/licenses
 
 **Mohammad Abdulkader Omar**  
 Website: https://momar.tech  
-Version: **1.1**
+Version: **1.0**
 
 ---
 
@@ -192,12 +192,6 @@ If this project helps you, consider supporting it:
 
 ## ⚠ Disclaimer
 
-This project is provided **as-is**.
-
-- Always test scripts before production deployment.
-- Validate restart policies and user experience.
-- Ensure compatibility with your organization’s device management policies.
-
-
+These scripts are provided as-is. Test them in a staging environment before applying them to production. The author is not responsible for any unintended outcomes resulting from their use.
 
 
