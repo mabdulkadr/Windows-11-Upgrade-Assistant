@@ -1,83 +1,135 @@
 ﻿<#!
 .SYNOPSIS
-    Launches a guided Windows 11 in-place upgrade from local installation media.
+    Launches a guided Windows 11 in-place upgrade from local installation media
+    (mounted ISO, USB stick, or extracted folder) using a modern WPF-based UI.
 
 .DESCRIPTION
-    Windows 11 Upgrade Assistant provides a WPF-based interface to prepare and start
-    a Windows 11 upgrade using setup.exe from a mounted ISO, USB media, or another
-    local source.
+    Windows 11 Upgrade Assistant is a single-file PowerShell tool that helps
+    operators perform an in-place upgrade to Windows 11 while preserving files,
+    applications, and settings. It can also bypass Windows 11 hardware checks
+    (TPM 2.0, Secure Boot, supported CPU) on older devices by injecting the
+    /Product server and /compat IgnoreWarning switches.
 
-    The script performs basic readiness checks, displays current device and OS details,
-    lets the operator choose from predefined setup command profiles, and builds the
-    final command line before execution.
+    The script collects device/OS information, runs readiness checks (RAM, free
+    disk space, AC power), validates the user-selected setup.exe, lets the user
+    pick from predefined setup command profiles, and builds the final command
+    line for review before execution.
 
-    It also supports selecting an ISO file, opening the Microsoft download page,
-    copying the planned command, and optionally prompting to relaunch Windows Setup
-    with administrator rights when elevation is required.
+    Main capabilities:
+      * WPF graphical interface (single window, 1040x740) with sidebar session
+        info, OS details card, readiness pills, and a planned-command preview.
+      * Browse for setup.exe on local media, or mount an ISO and auto-fill the
+        path. Unmount support is included.
+      * Three preset upgrade profiles (Basic, Standard, Silent) with editable
+        extra-arguments field.
+      * Optional re-launch of Windows Setup with elevation (RunAs) when the
+        current session is not elevated.
+      * One-click copy of the planned command to the clipboard.
+      * Confirmation dialog before executing setup.exe (with Copy as fallback).
+      * Session transcript logging to %LOCALAPPDATA%\Win11UpgradeAssistant\Logs.
+      * Background device-info collection on a dedicated MTA runspace so the
+        UI thread never blocks on WMI/CIM calls.
 
     Exit codes:
-    - Exit 0: The script completed or the UI was closed without a fatal error
-    - Exit 1: The script failed or could not continue
+      * 0 : The script completed normally or the UI was closed without error.
+      * 1 : The script failed or could not continue (currently unused; failures
+            inside the UI are surfaced via the status bar).
 
 .RUN AS
-    User context is supported. Administrator rights may be required by Windows Setup
-    depending on the selected action and local policy.
+    Standard user is supported for browsing, mounting the ISO, and reviewing
+    the plan. Administrator rights are usually required by Windows Setup
+    itself when it actually runs; the assistant offers a RunAs prompt in that
+    case.
 
 .EXAMPLE
-    .\Windows-11-Upgrade-Assistant-v1.0.ps1
+    .\Windows-11-Upgrade-Assistant-v1.1.ps1
 
-    Opens the upgrade assistant UI, allows you to select setup.exe or an ISO,
-    review the generated command, and start Windows Setup.
+    Opens the upgrade assistant UI. The user can select setup.exe or an ISO,
+    review the generated command, copy it, and start Windows Setup.
 
 .NOTES
-    Author  : Mohammad Abdelkader
-    Website : momar.tech
-    Date    : 2026-02-25
-    Version : 1.0
+    Author      : Mohammad Abdelkader Omar
+    Website     : https://momar.tech
+    LinkedIn    : https://www.linkedin.com/in/mabdulkadr/
+    Date        : 2026-06-08
+    Version     : 1.1
+    Changelog   :
+                 1.1  - Added: ISO dismount button, Clear path button, session
+                          logging (Start-Transcript), launch confirmation
+                          dialog, Copy-as-fallback from confirm.
+                       - Fixed: Null reference on tRam/tFree controls (removed),
+                          redundant Update-DeviceUI in TextChanged handler,
+                          Get-DeviceInfo product-name reverse case.
+                       - Refactored: De-duplicated Get-DeviceInfo between the
+                          foreground function and the background runspace.
+                 1.0  - Initial release.
 #>
 #region ======================== SETTINGS ============================
 
+# ---------------------------------------------------------------------------
 # Preset setup.exe command templates (selectable in the UI).
-# Some profiles use /Product server and /compat IgnoreWarning to relax hardware checks on older devices.
-# Use only if approved by your org policy.
-# setup.exe /Product server /compat IgnoreWarning /MigrateDrivers All
-# setup.exe /auto upgrade /Product server /migratedrivers all /dynamicupdate disable /eula accept /compat ignorewarning /copylogs C:\WinSetup.log
-# setup.exe /auto Upgrade /migratedrivers all /ShowOOBE none /Telemetry Disable /dynamicupdate disable /eula accept /quiet /noreboot /compat ignorewarning /copylogs C:\WinSetup.log
-
+#
+# These profiles intentionally include /Product server and /compat IgnoreWarning
+# in order to relax the Windows 11 hardware checks (TPM, Secure Boot, CPU).
+# Use only on devices approved by your organisational policy. The exact
+# reference lines (commented out below) document the full setup.exe surface
+# the assistant can emit.
+#
+#   setup.exe /Product server /compat IgnoreWarning /MigrateDrivers All
+#   setup.exe /auto upgrade /Product server /migratedrivers all /dynamicupdate disable /eula accept /compat ignorewarning /copylogs C:\WinSetup.log
+#   setup.exe /auto Upgrade /migratedrivers all /ShowOOBE none /Telemetry Disable /dynamicupdate disable /eula accept /quiet /noreboot /compat ignorewarning /copylogs C:\WinSetup.log
+# ---------------------------------------------------------------------------
 $script:SetupProfiles = @(
     [pscustomobject]@{
-        Key = "OPT1"
-        Args = "/Product server /compat IgnoreWarning /MigrateDrivers All"
+        Key     = "OPT1"
+        Args    = "/Product server /compat IgnoreWarning /MigrateDrivers All"
         LabelEN = "Option 1 - Basic (Clean Install + driver migration)"
-        Desc = "Basic upgrade; Clean Install and migrates drivers."
+        Desc    = "Basic upgrade; Clean Install and migrates drivers."
     }
     [pscustomobject]@{
-        Key = "OPT2"
-        Args = "/auto upgrade /Product server /compat ignorewarning /migratedrivers all /eula accept /copylogs C:\WinSetup.log"
+        Key     = "OPT2"
+        Args    = "/auto upgrade /Product server /compat ignorewarning /migratedrivers all /eula accept /copylogs C:\WinSetup.log"
         LabelEN = "Option 2 - Standard In-Place Upgrade (Keep data/apps + logs)"
-        Desc = "Standard in-place upgrade; keeps data/apps and saves logs."
+        Desc    = "Standard in-place upgrade; keeps data/apps and saves logs."
     }
     [pscustomobject]@{
-        Key = "OPT3"
-        Args = "/auto Upgrade /Product server /compat ignorewarning /migratedrivers all /eula accept /ShowOOBE none /Telemetry Disable /quiet /noreboot /copylogs C:\WinSetup.log"
+        Key     = "OPT3"
+        Args    = "/auto Upgrade /Product server /compat ignorewarning /migratedrivers all /eula accept /ShowOOBE none /Telemetry Disable /quiet /noreboot /copylogs C:\WinSetup.log"
         LabelEN = "Option 3 - Silent In-Place Upgrade (No reboot + no user prompts)"
-        Desc = "Silent in-place upgrade; no prompts and no automatic reboot."
+        Desc    = "Silent in-place upgrade; no prompts and no automatic reboot."
     }
 )
 $script:DefaultProfileKey = "OPT2"
 
-# Readiness thresholds (informational only)
-$MinRamGB  = 8
-$MinDiskGB = 30
+# ---------------------------------------------------------------------------
+# Readiness thresholds (informational only; they never block the UI).
+#   $MinRamGB       : Minimum total RAM in GB.
+#   $MinDiskGB      : Minimum free space on C: in GB.
+#   $RequireACPower : When $true, attempt to detect battery; desktops are
+#                     always reported as "on AC" (best-effort fallback).
+#   $UiVersion      : Displayed in the UI footer; keep in sync with header.
+# ---------------------------------------------------------------------------
+$MinRamGB       = 8
+$MinDiskGB      = 30
 $RequireACPower = $true
-$UiVersion = "1.0"
+$UiVersion      = "1.1"
 #endregion ==============================================================
 
 #region ===================== ENVIRONMENT HELPERS ======================
+
+<#
+.SYNOPSIS
+    Re-launches the current script in a Single-Threaded Apartment (STA)
+    PowerShell host if the current thread is not STA. WPF requires STA; the
+    script simply exits in the parent process when a child is spawned so the
+    caller sees the child's exit code.
+#>
 function Ensure-STA {
     $state = $null
     try { $state = [System.Threading.Thread]::CurrentThread.ApartmentState } catch {}
     if ($state -ne "STA") {
+        # No path means we are running in an interactive prompt; in that
+        # environment WPF will already have a working apartment state.
         $self = $MyInvocation.MyCommand.Path
         if ([string]::IsNullOrWhiteSpace($self) -or !(Test-Path $self)) { return }
         $arg = "-NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File `"$self`""
@@ -85,36 +137,79 @@ function Ensure-STA {
         exit $p.ExitCode
     }
 }
+
+<#
+.SYNOPSIS
+    Starts a transcript of the current session under
+    %LOCALAPPDATA%\Win11UpgradeAssistant\Logs\Session_<timestamp>.log.
+    Best-effort: any failure is swallowed so logging never blocks the UI.
+#>
+function Start-SessionLog {
+    try {
+        $logDir = Join-Path $env:LOCALAPPDATA "Win11UpgradeAssistant\Logs"
+        if (-not (Test-Path $logDir)) { [void](New-Item -ItemType Directory -Path $logDir -Force) }
+        $logFile = Join-Path $logDir ("Session_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
+        Start-Transcript -Path $logFile -Append -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "Session log: $logFile"
+    } catch {}
+}
 #endregion ==============================================================
 
 #region ============================ DATA ================================
-# Collect OS + hardware info for the UI cards.
+
+<#
+.SYNOPSIS
+    Collects OS, hardware, and disk information for the UI cards.
+    Returns a PSCustomObject that is consumed by Update-DeviceUI.
+
+.DESCRIPTION
+    All CIM/WMI calls are wrapped in -ErrorAction SilentlyContinue so the
+    function never throws - the UI is designed to show a graceful
+    "checks failed" state instead. The registry path used here is the
+    canonical location for Windows edition metadata; if it is missing
+    (very rare), the script falls back to WMI.
+
+    The product-name normalisation handles the common case where the
+    registry still says "Windows 10" on a build >= 22000 device that has
+    been upgraded to Windows 11, and the inverse case where the registry
+    claims "Windows 11" on a Windows 10 build (e.g. due to a
+    compatibility shim).
+#>
 function Get-DeviceInfo {
-    $cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue
-    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    # Read the registry once; it is the fastest source for the static fields.
+    $cv   = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue
+    $os   = Get-CimInstance Win32_OperatingSystem       -ErrorAction SilentlyContinue
+    $cs   = Get-CimInstance Win32_ComputerSystem        -ErrorAction SilentlyContinue
     $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
 
+    # Pick the most specific "version" label available.
     $version = $cv.DisplayVersion
     if ([string]::IsNullOrWhiteSpace($version)) { $version = $cv.ReleaseId }
     if ([string]::IsNullOrWhiteSpace($version) -and $os) { $version = $os.Version }
 
+    # Build.UBR is the patch level (e.g. 22621.4391). We compose both.
     $build = $cv.CurrentBuild
-    $ubr = $cv.UBR
+    $ubr   = $cv.UBR
     if (-not $build -and $os) { $build = $os.BuildNumber }
     $buildText = if ($build -and $ubr) { "$build.$ubr" } elseif ($build) { "$build" } else { $null }
-    $buildNum = $null
+    $buildNum  = $null
     try { if ($build) { $buildNum = [int]$build } } catch {}
 
+    # InstallDate is a Windows FILETIME expressed as seconds since 1970.
     $installDate = $null
     try { if ($cv.InstallDate) { $installDate = (Get-Date "1970-01-01").AddSeconds([int64]$cv.InstallDate).ToString("yyyy-MM-dd") } } catch {}
 
     $modelText = ""
     if ($cs) { $modelText = ("{0} / {1}" -f $cs.Manufacturer, $cs.Model).Trim() }
 
+    # Normalise product name on devices that have crossed the 22000 boundary
+    # in either direction. See function header for details.
     $productName = if ($cv.ProductName) { $cv.ProductName } elseif ($os) { $os.Caption } else { $null }
     if ($productName -and $buildNum -ge 22000 -and $productName -match "Windows 10") {
         $productName = $productName -replace "Windows 10", "Windows 11"
+    }
+    if ($productName -and $buildNum -lt  22000 -and $productName -match "Windows 11") {
+        $productName = $productName -replace "Windows 11", "Windows 10"
     }
 
     [pscustomobject]@{
@@ -124,11 +219,22 @@ function Get-DeviceInfo {
         InstallDate = $installDate
         Model       = $modelText
         RamGB       = if ($cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory/1GB,2) } else { $null }
-        FreeC       = if ($disk.FreeSpace) { [math]::Round($disk.FreeSpace/1GB,2) } else { $null }
+        FreeC       = if ($disk.FreeSpace)          { [math]::Round($disk.FreeSpace/1GB,2) }          else { $null }
     }
 }
 
-# Check AC power status (best-effort on desktops).
+<#
+.SYNOPSIS
+    Reports whether the system is currently on AC power.
+
+.DESCRIPTION
+    Best-effort implementation:
+      * If a battery is reported, the WMI BatteryStatus codes 2,6,7,8,9 are
+        the documented "charging / on AC" states.
+      * On desktops or any system that simply has no battery entry, we
+        optimistically return $true so the check never blocks the user
+        (desktops cannot run out of battery mid-upgrade).
+#>
 function Get-AcPowerStatus {
     try {
         $b = Get-CimInstance Win32_Battery -ErrorAction Stop
@@ -137,17 +243,32 @@ function Get-AcPowerStatus {
     } catch { return $true }
 }
 
-# Validate user-selected setup.exe path.
+<#
+.SYNOPSIS
+    Validates a user-supplied path to a setup.exe file.
+.PARAMETER Path
+    The full path to verify. The function checks: not empty, file exists,
+    and filename is exactly "setup.exe" (case-insensitive).
+#>
 function Test-SetupExePath {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    if (!(Test-Path $Path)) { return $false }
+    if (!(Test-Path $Path))                  { return $false }
     return ([IO.Path]::GetFileName($Path).ToLower() -eq "setup.exe")
 }
 #endregion ==============================================================
+#endregion ==============================================================
 
 #region ============================= UI ================================
+
+# WPF requires an STA thread, and we also want a session transcript for
+# post-mortem analysis. Both helpers are no-ops when their preconditions
+# are already satisfied.
 Ensure-STA
+Start-SessionLog
+
+# Load WPF (presentation) and WinForms (for OpenFileDialog). Out-Null
+# suppresses the noisy "GAC" version lines that Add-Type prints by default.
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase | Out-Null
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 
@@ -155,7 +276,7 @@ $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Windows 11 Upgrade"
-        Width="1040" Height="740"
+        Width="1200" Height="770"
         WindowStartupLocation="CenterScreen"
         Background="#F4F7FB"
         FontFamily="Segoe UI"
@@ -297,7 +418,7 @@ $xaml = @"
             <Border Style="{StaticResource SidebarCard}" Margin="12,0,12,14">
               <StackPanel>
                 <TextBlock Name="sbAboutTitle" Text="About this tool" Style="{StaticResource SidebarTitle}"/>
-                <TextBlock Name="sbAboutBody" Style="{StaticResource SidebarText}" Text="Runs readiness checks, validates setup media, and launches the upgrade safely."/>
+                <TextBlock Name="sbAboutBody" Style="{StaticResource SidebarText}" Text="For unsupported hardware: bypasses TPM 2.0, Secure Boot, and CPU checks. Runs readiness checks, validates setup media, and launches the upgrade safely."/>
               </StackPanel>
             </Border>
 
@@ -305,9 +426,10 @@ $xaml = @"
             <Border BorderBrush="#E6EBF4" BorderThickness="0,1,0,0" Padding="14" Background="#FFFFFF">
               <StackPanel>
                 <TextBlock Name="sbFooterOrg" Text="Windows 11 Upgrade" FontSize="13" FontWeight="Bold" Foreground="#1F2D3A"/>
-                <TextBlock Name="sbFooterVersion" Text="Version 1.4" FontSize="11" Foreground="#5F6B7A" Margin="0,4,0,0"/>
+                <!-- Footer version is bound to $UiVersion at runtime; the literal below is the fallback if binding is bypassed. -->
+                <TextBlock Name="sbFooterVersion" Text="Version 1.1" FontSize="11" Foreground="#5F6B7A" Margin="0,4,0,0"/>
                 <TextBlock FontSize="11" Foreground="#7C8BA1" Margin="0,8,0,0">
-                  <Run Text="© 2025 "/>
+                  <Run Text="© 2025-2026 "/>
                   <Hyperlink x:Name="FooterLink" NavigateUri="https://www.linkedin.com/in/mabdulkadr/">Mohammad Omar</Hyperlink>
                 </TextBlock>
               </StackPanel>
@@ -330,8 +452,8 @@ $xaml = @"
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <StackPanel Grid.Column="0">
-            <TextBlock Name="tHeaderTitle" Text="Windows 11 Upgrade" FontSize="20" FontWeight="Bold" Foreground="#1F2D3A"/>
-            <TextBlock Name="tHeaderSub" Text="Quick checklist to upgrade safely." FontSize="13" Foreground="#5F6B7A" Margin="0,6,0,0"/>
+            <TextBlock Name="tHeaderTitle" Text="Windows 11 Upgrade  -  Unsupported Devices" FontSize="20" FontWeight="Bold" Foreground="#1F2D3A"/>
+            <TextBlock Name="tHeaderSub" Text="Bypasses TPM 2.0, Secure Boot, and CPU checks. Preserves your files and applications." FontSize="13" Foreground="#5F6B7A" Margin="0,6,0,0"/>
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
             <Button Name="btnRecheck" Content="Re-check" Height="30" MinWidth="96" Margin="0,0,10,0" Padding="12,0"
@@ -345,8 +467,8 @@ $xaml = @"
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="1.15*"/>
-          <ColumnDefinition Width="0.85*"/>
+          <ColumnDefinition Width="1.10*"/>
+          <ColumnDefinition Width="0.95*"/>
         </Grid.ColumnDefinitions>
         <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,12,10" VerticalAlignment="Stretch">
           <Grid Grid.IsSharedSizeScope="True">
@@ -436,14 +558,21 @@ $xaml = @"
               <TextBox Name="tbSetupPath" Grid.Row="0" Grid.Column="1" Height="30" Background="White" BorderBrush="#DDE6F2" BorderThickness="1"
                        Padding="4" VerticalContentAlignment="Center" FlowDirection="LeftToRight" TextAlignment="Left"
                        ToolTip="Select setup.exe from a mounted ISO or USB media"/>
-              <Button Grid.Row="0" Grid.Column="2" Name="btnBrowse" Content="Browse..." Height="30" MinWidth="110" Margin="8,0,0,0" Padding="12,0"
-                      Style="{StaticResource BtnGreen}" ToolTip="Browse for setup.exe on local media"/>
+              <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+                <Button Name="btnBrowse" Content="Browse..." Height="30" MinWidth="70" Padding="12,0"
+                        Style="{StaticResource BtnGreen}" ToolTip="Browse for setup.exe on local media"/>
+                <Button Name="btnClearSetup" Content="Clear" Height="30" MinWidth="50" Margin="6,0,0,0" Padding="12,0"
+                        Style="{StaticResource BtnBlue}" ToolTip="Clear the current setup.exe path"/>
+              </StackPanel>
 
               <TextBlock Name="tIsoPathLabel" Grid.Row="1" Grid.Column="0" Foreground="#111827" FontWeight="SemiBold"
                          Margin="0,10,8,6" VerticalAlignment="Center"/>
               <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,0">
                 <Button Name="btnIsoBrowse" Content="Choose ISO" Height="30" MinWidth="110" Padding="12,0"
                         Style="{StaticResource BtnGreen}" ToolTip="Select an ISO file, mount it, and fill setup.exe"/>
+                <Button Name="btnIsoDismount" Content="Unmount ISO" Height="30" MinWidth="130" Margin="8,0,0,0" Padding="12,0"
+                        Style="{StaticResource BtnBlue}" Visibility="Collapsed"
+                        ToolTip="Release the currently mounted ISO"/>
                 <Button Name="btnIsoDownload" Content="Download ISO" Height="30" MinWidth="170" Margin="8,0,0,0" Padding="12,0"
                         Style="{StaticResource BtnBlue}" ToolTip="Open Microsoft Windows 11 download page (official)"/>
               </StackPanel>
@@ -525,9 +654,12 @@ $xaml = @"
 #endregion ==============================================================
 
 #region ========================= CONTROL REFS ==========================
-# Controls
+# ---------------------------------------------------------------------------
+# Bind to the XAML.
+# XamlReader.Load expects an XmlReader, hence the XmlNodeReader wrapper.
+# ---------------------------------------------------------------------------
 $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
-$win = [Windows.Markup.XamlReader]::Load($reader)
+$win    = [Windows.Markup.XamlReader]::Load($reader)
 
 $tHeaderTitle = $win.FindName("tHeaderTitle")
 $tHeaderSub   = $win.FindName("tHeaderSub")
@@ -563,17 +695,16 @@ $tVer = $win.FindName("tVer")
 $tBuild = $win.FindName("tBuild")
 $tInstall = $win.FindName("tInstall")
 $tModel = $win.FindName("tModel")
-$tRam = $win.FindName("tRam")
-$tFree = $win.FindName("tFree")
-
 $tMediaTitle = $win.FindName("tMediaTitle")
 $tMediaHelp  = $win.FindName("tMediaHelp")
 $tSetupPathLabel = $win.FindName("tSetupPathLabel")
 $tbSetupPath = $win.FindName("tbSetupPath")
 $btnBrowse   = $win.FindName("btnBrowse")
+$btnClearSetup = $win.FindName("btnClearSetup")
 $tMediaStatus= $win.FindName("tMediaStatus")
 $tIsoPathLabel = $win.FindName("tIsoPathLabel")
 $btnIsoBrowse = $win.FindName("btnIsoBrowse")
+$btnIsoDismount = $win.FindName("btnIsoDismount")
 $btnIsoDownload = $win.FindName("btnIsoDownload")
 $tCmdProfileTitle = $win.FindName("tCmdProfileTitle")
 $tCmdProfileHelp = $win.FindName("tCmdProfileHelp")
@@ -609,29 +740,57 @@ $sbFooterOrg = $win.FindName("sbFooterOrg")
 $sbFooterVersion = $win.FindName("sbFooterVersion")
 $FooterLink = $win.FindName("FooterLink")
 
-# State
-$script:SetupOk = $false
-$script:IsAdmin = $false
-$script:Device = $null
-$script:IsLoading = $false
-$script:BgPs = $null
-$script:BgAsync = $null
-$script:BgTimer = $null
+# ---------------------------------------------------------------------------
+# Script-level state.
+# These are $script: scoped so event-handler scriptblocks (which run in a
+# child scope) can read/write them without re-importing.
+# ---------------------------------------------------------------------------
+# $script:SetupOk     : True when the path in $tbSetupPath passes Test-SetupExePath.
+# $script:IsAdmin     : True when the current process is elevated.
+# $script:Device      : The PSCustomObject returned by Get-DeviceInfo.
+# $script:IsLoading   : True while a background device-info job is running.
+# $script:BgPs        : The PowerShell instance used for the background runspace.
+# $script:BgAsync     : IAsyncResult returned by BeginInvoke on $script:BgPs.
+# $script:BgTimer     : DispatcherTimer that polls the background job.
+# $script:SetupPathBorderDefault / SetupPathBgDefault : Cached brushes so we
+#                       can restore the original look when validation fails.
+# $script:MountedIso  : The DiskImage object returned by Mount-DiskImage, kept
+#                       so Dismount-DiskImage can be issued later.
+# ---------------------------------------------------------------------------
+$script:SetupOk     = $false
+$script:IsAdmin     = $false
+$script:Device      = $null
+$script:IsLoading   = $false
+$script:BgPs        = $null
+$script:BgAsync     = $null
+$script:BgTimer     = $null
 $script:SetupPathBorderDefault = $null
-$script:SetupPathBgDefault = $null
+$script:SetupPathBgDefault     = $null
+$script:MountedIso  = $null
 
+# Cache the original brushes of the setup-path textbox so Update-SetupState
+# can switch it to "valid" (green) and back to "default" without losing
+# the original styling.
 if ($tbSetupPath) {
     $script:SetupPathBorderDefault = $tbSetupPath.BorderBrush
-    $script:SetupPathBgDefault = $tbSetupPath.Background
+    $script:SetupPathBgDefault     = $tbSetupPath.Background
 }
 #endregion ==============================================================
 
 #region ============================ BINDINGS ===========================
-# Apply UI labels (English only).
+
+<#
+.SYNOPSIS
+    Applies the English UI labels and triggers the first paint of dynamic
+    content (profile list, device info, status bar). The script is
+    English-only by design; this function exists to centralise every
+    string so a future translation can be plugged in by replacing this
+    function body.
+#>
 function Apply-Lang {
     $win.Title = "Windows 11 Upgrade"
-    if ($tHeaderTitle) { $tHeaderTitle.Text = "Welcome" }
-    if ($tHeaderSub) { $tHeaderSub.Text = "Perform an in-place upgrade to Windows 11 while preserving files and applications." }
+    if ($tHeaderTitle) { $tHeaderTitle.Text = "Welcome  -  Unsupported Devices" }
+    if ($tHeaderSub) { $tHeaderSub.Text = "Upgrade unsupported PCs to Windows 11 (bypasses TPM 2.0, Secure Boot, and CPU checks). Preserves your files and applications." }
     if ($tTopHint) { $tTopHint.Text = "Pick the Windows setup.exe file to enable Start Upgrade." }
 
     if ($tMediaTitle) { $tMediaTitle.Text = "Windows Media" }
@@ -653,12 +812,16 @@ function Apply-Lang {
     if ($tChkACLabel) { $tChkACLabel.Text = "Power (AC):" }
 
     if ($btnBrowse) { $btnBrowse.Content = "Browse..." }
+    if ($btnClearSetup) { $btnClearSetup.Content = "Clear" }
+    if ($btnIsoDismount) { $btnIsoDismount.Content = "Unmount ISO" }
     if ($btnRecheck) { $btnRecheck.Content = "Re-check" }
     if ($btnUpgrade) { $btnUpgrade.Content = "Start Upgrade" }
     if ($btnClose) { $btnClose.Content = "Close" }
 
     if ($lblDeviceTitle) { $lblDeviceTitle.Text = "Device & OS Details" }
     if ($lblHardwareTitle) { $lblHardwareTitle.Text = "Hardware" }
+    if ($lblRam) { $lblRam.Text = "RAM (GB)" }
+    if ($lblFreeDisk) { $lblFreeDisk.Text = "Free Disk C: (GB)" }
     if ($lblWindows) { $lblWindows.Text = "Windows" }
     if ($lblVersion) { $lblVersion.Text = "Version" }
     if ($lblBuild) { $lblBuild.Text = "Build (UBR)" }
@@ -676,8 +839,8 @@ function Apply-Lang {
     if ($sbUserLabel) { $sbUserLabel.Text = "User:" }
     if ($sbElevationLabel) { $sbElevationLabel.Text = "Elevation:" }
     if ($sbAboutTitle) { $sbAboutTitle.Text = "About this tool" }
-    if ($sbAboutBody) { $sbAboutBody.Text = "Perform an in-place upgrade to Windows 11 while preserving files and applications." }
-    if ($sbFooterOrg) { $sbFooterOrg.Text = "Qassim University - IT Operations" }
+    if ($sbAboutBody) { $sbAboutBody.Text = "For unsupported hardware: bypasses TPM 2.0, Secure Boot, and CPU checks to upgrade this PC to Windows 11 while preserving files and applications." }
+    if ($sbFooterOrg) { $sbFooterOrg.Text = "Windows 11 Upgrade" }
     if ($sbFooterVersion) { $sbFooterVersion.Text = ("Version {0}" -f $UiVersion) }
 
     if ($sessionElevationTxt) {
@@ -690,7 +853,12 @@ function Apply-Lang {
     Set-IsoButtonsEnabled -Enabled $true
 }
 
-# Build profile list for setup presets.
+<#
+.SYNOPSIS
+    Rebuilds the Setup-Profile ComboBox from $script:SetupProfiles.
+    Preserves the current selection whenever possible, otherwise falls back
+    to $script:DefaultProfileKey.
+#>
 function Update-ProfileItems {
     if (-not $cbSetupProfile) { return }
     $currentKey = $null
@@ -717,7 +885,11 @@ function Update-ProfileItems {
     Update-ProfileDescription
 }
 
-# Function: Get-SelectedProfileArgs
+<#
+.SYNOPSIS
+    Returns the Args string of the currently selected setup profile, or
+    the default profile's args if no selection is present.
+#>
 function Get-SelectedProfileArgs {
     $key = $script:DefaultProfileKey
     if ($cbSetupProfile -and $cbSetupProfile.SelectedItem -and $cbSetupProfile.SelectedItem.Tag) {
@@ -731,7 +903,11 @@ function Get-SelectedProfileArgs {
     return ""
 }
 
-# Function: Get-SelectedProfileDescription
+<#
+.SYNOPSIS
+    Returns the human-readable description (Desc) of the currently
+    selected setup profile, or an empty string.
+#>
 function Get-SelectedProfileDescription {
     $key = $script:DefaultProfileKey
     if ($cbSetupProfile -and $cbSetupProfile.SelectedItem -and $cbSetupProfile.SelectedItem.Tag) {
@@ -745,7 +921,11 @@ function Get-SelectedProfileDescription {
     return ""
 }
 
-# Function: Update-ProfileDescription
+<#
+.SYNOPSIS
+    Refreshes the small "description" textbox below the profile combobox
+    to match the currently selected profile.
+#>
 function Update-ProfileDescription {
     if (-not $tCmdProfileDesc) { return }
     $desc = Get-SelectedProfileDescription
@@ -756,7 +936,12 @@ function Update-ProfileDescription {
     }
 }
 
-# Function: Get-CombinedSetupArgs
+<#
+.SYNOPSIS
+    Joins the selected profile args with any user-provided extra args
+    (from the "Extra arguments" textbox). Trailing/leading whitespace is
+    trimmed; only one space separates the two segments.
+#>
 function Get-CombinedSetupArgs {
     $baseArgs = Get-SelectedProfileArgs
     $extraArgs = ""
@@ -766,7 +951,14 @@ function Get-CombinedSetupArgs {
     return ($baseArgs + " " + $extraArgs)
 }
 
-# Function: Get-SetupWorkingDirectory
+<#
+.SYNOPSIS
+    Returns the parent directory of the given setup.exe path, or $null if
+    the path is empty or the file does not exist. Used as the working
+    directory when launching setup.exe (so it can find its sibling files).
+.PARAMETER SetupPath
+    Absolute path to setup.exe.
+#>
 function Get-SetupWorkingDirectory {
     param([string]$SetupPath)
     try {
@@ -776,7 +968,12 @@ function Get-SetupWorkingDirectory {
     } catch { return $null }
 }
 
-# Function: Get-LaunchErrorText
+<#
+.SYNOPSIS
+    Maps a launch-time ErrorRecord to a short, end-user friendly message
+    that the status bar can display. Falls back to a generic "could not
+    open" message when the error text is empty or unrecognised.
+#>
 function Get-LaunchErrorText {
     param([object]$ErrorRecord)
     $msg = ""
@@ -794,7 +991,20 @@ function Get-LaunchErrorText {
     return "Could not open Windows Setup."
 }
 
-# Function: Start-WindowsSetup
+<#
+.SYNOPSIS
+    Launches setup.exe with the provided argument list. The working
+    directory is automatically set to the directory containing setup.exe
+    so its sibling files (sources, boot, etc.) are resolvable.
+
+.PARAMETER SetupPath
+    Absolute path to setup.exe.
+.PARAMETER SetupArgs
+    The argument string to pass (already combined via Get-CombinedSetupArgs).
+.PARAMETER RunAs
+    When present, the process is started with the "RunAs" verb, which
+    triggers a UAC elevation prompt.
+#>
 function Start-WindowsSetup {
     param(
         [Parameter(Mandatory)][string]$SetupPath,
@@ -813,7 +1023,12 @@ function Start-WindowsSetup {
     return (Start-Process @startParams)
 }
 
-# Color helpers for readiness pills.
+<#
+.SYNOPSIS
+    Creates a frozen SolidColorBrush from a #RRGGBB hex string. Frozen
+    brushes are thread-safe and slightly faster to draw; failures fall
+    back to Transparent so the UI never crashes on a malformed colour.
+#>
 function New-Brush {
     param([string]$Hex)
     try {
@@ -823,6 +1038,8 @@ function New-Brush {
         return $b
     } catch { return [Windows.Media.Brushes]::Transparent }
 }
+
+# Pre-build the three states' brush pairs so Set-CheckPill never has to.
 $script:ChkOkBg  = New-Brush "#DCF5E6"
 $script:ChkOkFg  = New-Brush "#1F6A3A"
 $script:ChkBadBg = New-Brush "#FAD3D3"
@@ -830,7 +1047,19 @@ $script:ChkBadFg = New-Brush "#8A1C1C"
 $script:ChkNeuBg = New-Brush "#EEF2F7"
 $script:ChkNeuFg = New-Brush "#374151"
 
-# Format a readiness pill with state color.
+<#
+.SYNOPSIS
+    Paints one of the readiness pills (RAM / Disk / Power) with the
+    appropriate colour/text for the given state.
+.PARAMETER Border
+    The Border element that owns the background colour.
+.PARAMETER TextBlock
+    The inner TextBlock whose Text and Foreground are updated.
+.PARAMETER State
+    One of: OK (green), FAIL (red), NEUTRAL (grey).
+.PARAMETER Text
+    The human-readable text to display inside the pill.
+#>
 function Set-CheckPill {
     param(
         [Parameter(Mandatory)][System.Windows.Controls.Border]$Border,
@@ -841,78 +1070,102 @@ function Set-CheckPill {
     $TextBlock.Text = $Text
     switch ($State) {
         "OK" {
-            $Border.Background = $script:ChkOkBg
+            $Border.Background   = $script:ChkOkBg
             $TextBlock.Foreground = $script:ChkOkFg
         }
         "FAIL" {
-            $Border.Background = $script:ChkBadBg
+            $Border.Background   = $script:ChkBadBg
             $TextBlock.Foreground = $script:ChkBadFg
         }
         default {
-            $Border.Background = $script:ChkNeuBg
+            $Border.Background   = $script:ChkNeuBg
             $TextBlock.Foreground = $script:ChkNeuFg
         }
     }
 }
 
-# Update readiness summary + minimums.
+<#
+.SYNOPSIS
+    Repaints the entire readiness panel from $script:Device. Called by
+    Update-DeviceUI and by the background-checks completion callback.
+
+.DESCRIPTION
+    Behaviour:
+      * If $script:Device is null and a check is in flight, show
+        "Checking device readiness..." in dark grey and render three
+        neutral em-dash pills.
+      * If $script:Device is null and no check is running, show the
+        "Checks failed" hint in red (typically: WMI is disabled, or the
+        script was started without the rights to query the registry).
+      * Otherwise, each pill is OK if the measured value meets
+        $MinRamGB / $MinDiskGB / AC power, else FAIL.
+      * The summary line is red when any pill is FAIL or when both RAM
+        and disk readings are missing, otherwise dark green.
+#>
 function Update-ReadinessUI {
     $d = $script:Device
     if (-not $d) {
         if ($script:IsLoading) {
-            $tReadinessSummary.Text = "Checking device readiness..."
+            $tReadinessSummary.Text       = "Checking device readiness..."
             $tReadinessSummary.Foreground = [System.Windows.Media.Brushes]::DarkSlateGray
         } else {
-            $tReadinessSummary.Text = "Checks failed. Try as admin or ensure WMI is running."
+            $tReadinessSummary.Text       = "Checks failed. Try as admin or ensure WMI is running."
             $tReadinessSummary.Foreground = [System.Windows.Media.Brushes]::Firebrick
         }
-        Set-CheckPill $bChkRam $tChkRam "NEUTRAL" "—"
+        Set-CheckPill $bChkRam  $tChkRam  "NEUTRAL" "—"
         Set-CheckPill $bChkDisk $tChkDisk "NEUTRAL" "—"
-        Set-CheckPill $bChkAC $tChkAC "NEUTRAL" "—"
+        Set-CheckPill $bChkAC   $tChkAC   "NEUTRAL" "—"
         return
     }
 
-    $ramVal = $d.RamGB
+    $ramVal  = $d.RamGB
     $diskVal = $d.FreeC
 
+    # RAM pill: OK when at/above the configured minimum.
     $ramState = "NEUTRAL"
     if ($ramVal -ne $null -and $ramVal -ne "") {
         $ramState = if ([double]$ramVal -ge [double]$MinRamGB) { "OK" } else { "FAIL" }
     }
+    # Disk pill: OK when C: has at/above the configured minimum free space.
     $diskState = "NEUTRAL"
     if ($diskVal -ne $null -and $diskVal -ne "") {
         $diskState = if ([double]$diskVal -ge [double]$MinDiskGB) { "OK" } else { "FAIL" }
     }
 
-    $ramText = if ($ramVal -ne $null -and $ramVal -ne "") { "{0} GB (Min {1})" -f $ramVal, $MinRamGB } else { "—" }
+    $ramText  = if ($ramVal  -ne $null -and $ramVal  -ne "") { "{0} GB (Min {1})" -f $ramVal,  $MinRamGB  } else { "—" }
     $diskText = if ($diskVal -ne $null -and $diskVal -ne "") { "{0} GB (Min {1})" -f $diskVal, $MinDiskGB } else { "—" }
 
     Set-CheckPill $bChkRam  $tChkRam  $ramState  $ramText
     Set-CheckPill $bChkDisk $tChkDisk $diskState $diskText
 
+    # AC power is only consulted when the script requires it.
     $acState = "NEUTRAL"
-    $acText = "—"
+    $acText  = "—"
     if ($RequireACPower) {
-        $okAC = Get-AcPowerStatus
+        $okAC    = Get-AcPowerStatus
         $acState = if ($okAC) { "OK" } else { "FAIL" }
-        $acText = if ($okAC) { "OK" } else { "Not on AC" }
+        $acText  = if ($okAC) { "OK" } else { "Not on AC" }
     }
     Set-CheckPill $bChkAC $tChkAC $acState $acText
 
     $hasFail = ($ramState -eq "FAIL" -or $diskState -eq "FAIL" -or ($RequireACPower -and $acState -eq "FAIL"))
     if (($ramVal -eq $null -or $ramVal -eq "") -and ($diskVal -eq $null -or $diskVal -eq "")) {
-        $tReadinessSummary.Text = "Checks failed. Try as admin or ensure WMI is running."
+        $tReadinessSummary.Text       = "Checks failed. Try as admin or ensure WMI is running."
         $tReadinessSummary.Foreground = [System.Windows.Media.Brushes]::Firebrick
     } elseif ($hasFail) {
-        $tReadinessSummary.Text = "One or more requirements are not met."
+        $tReadinessSummary.Text       = "One or more requirements are not met."
         $tReadinessSummary.Foreground = [System.Windows.Media.Brushes]::Firebrick
     } else {
-        $tReadinessSummary.Text = "This device meets minimum requirements."
+        $tReadinessSummary.Text       = "This device meets minimum requirements."
         $tReadinessSummary.Foreground = [System.Windows.Media.Brushes]::DarkGreen
     }
 }
 
-# Update device details on the right card.
+<#
+.SYNOPSIS
+    Repaints the OS Details card from $script:Device, then delegates the
+    readiness panel to Update-ReadinessUI.
+#>
 function Update-DeviceUI {
     $d = $script:Device
 
@@ -921,13 +1174,15 @@ function Update-DeviceUI {
     if ($tBuild) { $tBuild.Text = if ($d -and $d.Build) { $d.Build } else { "—" } }
     if ($tInstall) { $tInstall.Text = if ($d -and $d.InstallDate) { $d.InstallDate } else { "—" } }
     if ($tModel) { $tModel.Text = if ($d -and $d.Model) { $d.Model } else { "—" } }
-    if ($tRam) { $tRam.Text = if ($d -and $d.RamGB -ne $null) { [string]$d.RamGB } else { "—" } }
-    if ($tFree) { $tFree.Text = if ($d -and $d.FreeC -ne $null) { [string]$d.FreeC } else { "—" } }
 
     Update-ReadinessUI
 }
 
-# Update setup path, command preview, and button state.
+<#
+.SYNOPSIS
+    Writes a message into the bottom status bar (tMediaStatus). If no
+    colour is supplied the text is rendered in DimGray (neutral).
+#>
 function Set-StatusBar {
     param(
         [string]$Text,
@@ -943,7 +1198,17 @@ function Set-StatusBar {
     }
 }
 
-# Update setup path, command preview, and button state.
+<#
+.SYNOPSIS
+    Recomputes everything that depends on the setup-path textbox:
+      * Updates $script:SetupOk via Test-SetupExePath.
+      * Repaints the path textbox (green border/bg on success, default on fail).
+      * Refreshes the planned-command preview.
+      * Enables or disables the "Start Upgrade" button.
+
+    Called whenever the user types in the path field, selects an ISO, or
+    changes the profile/extra-args textboxes.
+#>
 function Update-SetupState {
     $setupPath = $tbSetupPath.Text.Trim()
     $script:SetupOk = Test-SetupExePath $setupPath
@@ -975,7 +1240,11 @@ function Update-SetupState {
     $btnUpgrade.IsEnabled = $script:SetupOk
 }
 
-# Function: Set-IsoStatus
+<#
+.SYNOPSIS
+    Thin alias around Set-StatusBar used by the ISO/mount workflow so
+    the call sites read as a logical group.
+#>
 function Set-IsoStatus {
     param(
         [string]$Text,
@@ -984,14 +1253,39 @@ function Set-IsoStatus {
     Set-StatusBar -Text $Text -Color $Color
 }
 
-# Enable/disable ISO action buttons together.
+<#
+.SYNOPSIS
+    Enables or disables the "Choose ISO" and "Download ISO" buttons in
+    unison. The Unmount button is left alone - it has its own lifecycle
+    driven by Mount-IsoAndSetSetupPath.
+#>
 function Set-IsoButtonsEnabled {
     param([bool]$Enabled)
     if ($btnIsoBrowse) { $btnIsoBrowse.IsEnabled = $Enabled }
     if ($btnIsoDownload) { $btnIsoDownload.IsEnabled = $Enabled }
 }
 
-# Custom dialog to match the main UI style.
+<#
+.SYNOPSIS
+    Shows a small, owner-attached Yes/No/Cancel dialog that visually
+    matches the main window. Returns one of: "Yes", "No", "Cancel".
+
+.DESCRIPTION
+    The dialog uses an in-memory XAML definition so it does not require
+    any external file. The result is communicated via the dialog's Tag
+    property (set on each button's Click handler) and read by the caller
+    once ShowDialog() returns.
+.PARAMETER Title
+    Window title and bold heading text.
+.PARAMETER Message
+    Body text shown below the title (wraps automatically).
+.PARAMETER YesText
+    Caption of the primary action button.
+.PARAMETER NoText
+    Caption of the secondary action button (often used as "Copy").
+.PARAMETER CancelText
+    Caption of the cancel button.
+#>
 function Show-CustomChoiceDialog {
     param(
         [Parameter(Mandatory)][string]$Title,
@@ -1004,7 +1298,10 @@ function Show-CustomChoiceDialog {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Dialog"
-        Width="460" Height="240"
+        Width="500"
+        SizeToContent="Height"
+        MinHeight="220"
+        MaxHeight="520"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         Background="#F6F8FB"
@@ -1020,7 +1317,9 @@ function Show-CustomChoiceDialog {
     <Border Background="White" BorderBrush="#DCE8F2" BorderThickness="1" CornerRadius="6" Padding="14">
       <StackPanel>
         <TextBlock Name="dlgTitle" FontSize="16" FontWeight="SemiBold" Foreground="#1F2D3A" Margin="0,0,0,8"/>
-        <TextBlock Name="dlgMessage" TextWrapping="Wrap" Foreground="#4B5563"/>
+        <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <TextBlock Name="dlgMessage" TextWrapping="Wrap" Foreground="#4B5563"/>
+        </ScrollViewer>
       </StackPanel>
     </Border>
     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
@@ -1052,7 +1351,11 @@ function Show-CustomChoiceDialog {
     return $dlg.Tag
 }
 
-# Open the official Microsoft Windows 11 download page.
+<#
+.SYNOPSIS
+    Opens the official Microsoft Windows 11 download page in the user's
+    default browser. Surfaces success/failure in the status bar.
+#>
 function Open-MicrosoftDownloadPage {
     $url = "https://www.microsoft.com/ar-sa/software-download/windows11"
     try {
@@ -1064,7 +1367,16 @@ function Open-MicrosoftDownloadPage {
     }
 }
 
-# Mount an ISO and set setup.exe automatically.
+<#
+.SYNOPSIS
+    Mounts the given ISO with Mount-DiskImage, waits briefly for the
+    volume to materialise, and writes the discovered setup.exe path
+    into $tbSetupPath. The DiskImage is stored in $script:MountedIso so
+    the Unmount button can release it later.
+
+.PARAMETER IsoPath
+    Absolute path to a .iso file.
+#>
 function Mount-IsoAndSetSetupPath {
     param([Parameter(Mandatory)][string]$IsoPath)
     if ([string]::IsNullOrWhiteSpace($IsoPath) -or !(Test-Path $IsoPath)) {
@@ -1072,8 +1384,10 @@ function Mount-IsoAndSetSetupPath {
         return
     }
     try {
+        Dismount-MountedIso -Silent
         $img = Mount-DiskImage -ImagePath $IsoPath -PassThru -ErrorAction Stop
         Start-Sleep -Milliseconds 600
+        $script:MountedIso = $img
         $vol = $img | Get-Volume
         $drive = $vol.DriveLetter
         if (-not $drive) {
@@ -1083,7 +1397,8 @@ function Mount-IsoAndSetSetupPath {
             $setup = "$drive`:\setup.exe"
             if (Test-Path $setup) {
                 $tbSetupPath.Text = $setup
-                Set-IsoStatus "ISO mounted." ([System.Windows.Media.Brushes]::DarkGreen)
+                Set-IsoStatus ("ISO mounted on {0}:. Click 'Unmount' to release." -f $drive) ([System.Windows.Media.Brushes]::DarkGreen)
+                if ($btnIsoDismount) { $btnIsoDismount.Visibility = [System.Windows.Visibility]::Visible }
             } else {
                 Set-IsoStatus "setup.exe not found on ISO." ([System.Windows.Media.Brushes]::Firebrick)
             }
@@ -1095,7 +1410,42 @@ function Mount-IsoAndSetSetupPath {
     }
 }
 
-# Run device checks in a background worker and update UI when done.
+<#
+.SYNOPSIS
+    Dismounts the ISO stored in $script:MountedIso, if any, and hides
+    the Unmount button. -Silent suppresses the status bar update so the
+    function can be called from startup/shutdown code paths.
+#>
+function Dismount-MountedIso {
+    param([switch]$Silent)
+    if (-not $script:MountedIso) { return }
+    try {
+        Dismount-DiskImage -ImagePath $script:MountedIso.ImagePath -ErrorAction Stop
+        $script:MountedIso = $null
+        if ($btnIsoDismount) { $btnIsoDismount.Visibility = [System.Windows.Visibility]::Collapsed }
+        if (-not $Silent) { Set-IsoStatus "ISO dismounted." ([System.Windows.Media.Brushes]::DarkGreen) }
+    } catch {
+        if (-not $Silent) { Set-IsoStatus "Dismount failed: $($_.Exception.Message)" ([System.Windows.Media.Brushes]::Firebrick) }
+    }
+}
+
+<#
+.SYNOPSIS
+    Kicks off Get-DeviceInfo on a dedicated MTA runspace so the WMI/CIM
+    calls never block the UI thread, then repaints the UI when they
+    complete.
+
+.DESCRIPTION
+    The function:
+      1. Marks the UI as "loading" and clears the previous device snapshot.
+      2. Disposes any prior background PowerShell instance and timer.
+      3. Creates a new [powershell] instance bound to an MTA runspace with
+         ReuseThread, and passes Get-DeviceInfo's source as a string
+         argument (Invoke-Expression materialises it inside the runspace).
+      4. Starts a DispatcherTimer that polls the async result every 150 ms.
+         When the runspace reports IsCompleted, the result is materialised
+         into $script:Device, the timer stops, and the UI is refreshed.
+#>
 function Start-BackgroundChecks {
     $script:IsLoading = $true
     $script:Device = $null
@@ -1105,52 +1455,17 @@ function Start-BackgroundChecks {
     if ($script:BgTimer) { try { $script:BgTimer.Stop() } catch {} }
     if ($script:BgPs) { try { $script:BgPs.Dispose() } catch {} }
 
-    $scriptBlockText = @'
-$cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue
-$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-$cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-$disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
-
-$version = $cv.DisplayVersion
-if ([string]::IsNullOrWhiteSpace($version)) { $version = $cv.ReleaseId }
-if ([string]::IsNullOrWhiteSpace($version) -and $os) { $version = $os.Version }
-
-$build = $cv.CurrentBuild
-$ubr = $cv.UBR
-if (-not $build -and $os) { $build = $os.BuildNumber }
-$buildText = if ($build -and $ubr) { "$build.$ubr" } elseif ($build) { "$build" } else { $null }
-$buildNum = $null
-try { if ($build) { $buildNum = [int]$build } } catch {}
-
-$installDate = $null
-try { if ($cv.InstallDate) { $installDate = (Get-Date "1970-01-01").AddSeconds([int64]$cv.InstallDate).ToString("yyyy-MM-dd") } } catch {}
-
-$modelText = ""
-if ($cs) { $modelText = ("{0} / {1}" -f $cs.Manufacturer, $cs.Model).Trim() }
-
-$productName = if ($cv.ProductName) { $cv.ProductName } elseif ($os) { $os.Caption } else { $null }
-if ($productName -and $buildNum -ge 22000 -and $productName -match "Windows 10") {
-    $productName = $productName -replace "Windows 10", "Windows 11"
-}
-
-[pscustomobject]@{
-    ProductName = $productName
-    Version     = $version
-    Build       = $buildText
-    InstallDate = $installDate
-    Model       = $modelText
-    RamGB       = if ($cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory/1GB,2) } else { $null }
-    FreeC       = if ($disk.FreeSpace) { [math]::Round($disk.FreeSpace/1GB,2) } else { $null }
-}
-'@
-
     $script:BgPs = [powershell]::Create()
     $runspace = [runspacefactory]::CreateRunspace()
     $runspace.ApartmentState = "MTA"
     $runspace.ThreadOptions = "ReuseThread"
     $runspace.Open()
     $script:BgPs.Runspace = $runspace
-    $null = $script:BgPs.AddScript($scriptBlockText)
+    $null = $script:BgPs.AddScript({
+        param([string]$FuncDef)
+        Invoke-Expression $FuncDef
+        Get-DeviceInfo
+    }).AddArgument(${function:Get-DeviceInfo})
     $script:BgAsync = $script:BgPs.BeginInvoke()
 
     $script:BgTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -1178,29 +1493,40 @@ if ($productName -and $buildNum -ge 22000 -and $productName -match "Windows 10")
 #endregion ==============================================================
 
 #region ============================= EVENTS ============================
+# ---------------------------------------------------------------------------
+# Wire UI events to handlers. Each block is guarded with -not $null checks
+# so a missing control (e.g. after a future XAML refactor) does not throw.
+# ---------------------------------------------------------------------------
+
+# Re-check button -> re-run device info on the background runspace.
 if ($btnRecheck) {
     $btnRecheck.Add_Click({
         Start-BackgroundChecks
     })
 }
 
+# Setup path textbox -> revalidate the path and refresh the preview.
+# NOTE: We deliberately do NOT call Update-DeviceUI here; that would
+# re-trigger the readiness panel on every keystroke and stutter the UI.
 $tbSetupPath.Add_TextChanged({
     Update-SetupState
-    Update-DeviceUI
 })
 
+# Profile combobox -> rebuild the planned command with the new args.
 if ($cbSetupProfile) {
     $cbSetupProfile.Add_SelectionChanged({
         Update-SetupState
     })
 }
 
+# Extra-args textbox -> append user switches to the planned command.
 if ($tbExtraArgs) {
     $tbExtraArgs.Add_TextChanged({
         Update-SetupState
     })
 }
 
+# Choose ISO -> file picker, then mount and auto-fill setup.exe path.
 if ($btnIsoBrowse) {
     $btnIsoBrowse.Add_Click({
         try {
@@ -1224,12 +1550,29 @@ if ($btnIsoBrowse) {
     })
 }
 
+# Download ISO -> open the Microsoft download page in the default browser.
 if ($btnIsoDownload) {
     $btnIsoDownload.Add_Click({
         Open-MicrosoftDownloadPage
     })
 }
 
+# Unmount ISO -> release the previously mounted image and hide the button.
+if ($btnIsoDismount) {
+    $btnIsoDismount.Add_Click({
+        Dismount-MountedIso
+    })
+}
+
+# Clear path -> blank the setup path textbox and reset the status bar.
+if ($btnClearSetup) {
+    $btnClearSetup.Add_Click({
+        $tbSetupPath.Text = ""
+        Set-StatusBar "Path cleared." ([System.Windows.Media.Brushes]::DarkSlateGray)
+    })
+}
+
+# Copy -> push the planned command onto the system clipboard.
 if ($btnCopyCmd) {
     $btnCopyCmd.Add_Click({
         try {
@@ -1243,6 +1586,7 @@ if ($btnCopyCmd) {
     })
 }
 
+# Browse -> file picker restricted to setup.exe (with sensible fallbacks).
 $btnBrowse.Add_Click({
     try {
         $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -1256,6 +1600,19 @@ $btnBrowse.Add_Click({
     } catch {}
 })
 
+<#
+   The Start Upgrade flow:
+     1. Re-validate the path (defence in depth - the button is already
+        disabled when the path is bad, but a focused user could trigger
+        this via keyboard just as it becomes invalid).
+     2. If not elevated, ask the user whether to RunAs, Continue as-is,
+        or Cancel. The script never forces elevation.
+     3. Show a final confirmation dialog that displays the exact command
+        about to be executed. The "Copy" option copies the command
+        without launching it - useful when the operator wants to run it
+        manually or audit it first.
+     4. Launch setup.exe with the chosen verb and surface the result.
+#>
 $btnUpgrade.Add_Click({
     $setupPath = $tbSetupPath.Text.Trim()
     if (!(Test-SetupExePath $setupPath)) {
@@ -1272,9 +1629,21 @@ $btnUpgrade.Add_Click({
         if ($choice -eq "Yes") { $useRunAs = $true }
     }
 
+    $setupArgs = Get-CombinedSetupArgs
+    $fullCmd = ('"{0}" {1}' -f $setupPath, $setupArgs)
+    Write-Host "Executing: $fullCmd  (RunAs=$useRunAs)"
+
+    $confirm = Show-CustomChoiceDialog -Title "Confirm Upgrade Launch" `
+        -Message ("Windows Setup will now start with the following command:`n`n{0}`n`nContinue?" -f $fullCmd) `
+        -YesText "Launch" -NoText "Copy" -CancelText "Cancel"
+    if ($confirm -eq "Cancel") { return }
+    if ($confirm -eq "No") {
+        try { [System.Windows.Clipboard]::SetText($fullCmd); Set-StatusBar "Command copied to clipboard." ([System.Windows.Media.Brushes]::DarkGreen) } catch {}
+        return
+    }
+
     try {
         Set-StatusBar "Launching Windows Setup..." ([System.Windows.Media.Brushes]::DarkGreen)
-        $setupArgs = Get-CombinedSetupArgs
         $null = Start-WindowsSetup -SetupPath $setupPath -SetupArgs $setupArgs -RunAs:$useRunAs
         Set-StatusBar "Windows Setup launched. If nothing appears, check for a UAC or SmartScreen prompt." ([System.Windows.Media.Brushes]::DarkGreen)
     } catch {
@@ -1282,9 +1651,10 @@ $btnUpgrade.Add_Click({
     }
 })
 
+# Close -> just close the window (the Closed handler performs the cleanup).
 $btnClose.Add_Click({ $win.Close() })
 
-# Footer hyperlink
+# Footer hyperlink -> open the author's LinkedIn in the default browser.
 if ($FooterLink) {
     $FooterLink.Add_RequestNavigate({
         param($sender,$e)
@@ -1293,7 +1663,7 @@ if ($FooterLink) {
     })
 }
 
-# Extra arguments link
+# Extra-args "learn more" hyperlink -> open the official docs page.
 if ($ExtraArgsLink) {
     $ExtraArgsLink.Add_RequestNavigate({
         param($sender,$e)
@@ -1305,6 +1675,11 @@ if ($ExtraArgsLink) {
 #endregion ==============================================================
 
 #region ============================== ON LOAD ===========================
+# ---------------------------------------------------------------------------
+# ContentRendered fires once the visual tree is fully realised. This is
+# the earliest point at which it is safe to populate dynamic content
+# (sidebar session info, device info, profile list, etc.).
+# ---------------------------------------------------------------------------
 $win.Add_ContentRendered({
     try {
         $win.Activate() | Out-Null
@@ -1325,15 +1700,25 @@ $win.Add_ContentRendered({
     Start-BackgroundChecks
 })
 
+# ---------------------------------------------------------------------------
+# Closed handler: tear down everything we own so the process can exit.
+#   * Dismount the ISO (best-effort, silent).
+#   * Stop the background dispatcher timer.
+#   * Stop and dispose the background PowerShell instance.
+#   * Stop the session transcript.
+# Environment.Exit is used (not just exit) so we do not return to the
+# WPF message loop, which would otherwise keep the host process alive.
+# ---------------------------------------------------------------------------
 $win.Add_Closed({
     try {
+        Dismount-MountedIso -Silent
         if ($script:BgTimer) { $script:BgTimer.Stop() }
         if ($script:BgPs) {
             try { $script:BgPs.Stop() } catch {}
             try { $script:BgPs.Dispose() } catch {}
         }
-        # No background download jobs to clean up.
     } catch {}
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch {}
     [System.Environment]::Exit(0)
 })
 
