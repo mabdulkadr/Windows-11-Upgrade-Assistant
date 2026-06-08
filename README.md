@@ -138,7 +138,6 @@ This tool does not require a fixed working folder, but recommended structure for
 Windows-11-Upgrade-Assistant
 ├── Windows-11-Upgrade-Assistant-v1.1.ps1
 ├── Windows-11-Upgrade-Assistant-v1.0.exe
-├── Windows-11-Upgrade-Assistant-v1.0.backup.ps1   (v1.0 source kept for reference)
 ├── README.md
 └── Screenshot.png
 ```
