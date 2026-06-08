@@ -137,7 +137,7 @@ This tool does not require a fixed working folder, but recommended structure for
 ```
 Windows-11-Upgrade-Assistant
 ├── Windows-11-Upgrade-Assistant-v1.1.ps1
-├── Windows-11-Upgrade-Assistant-v1.0.exe
+├── Windows-11-Upgrade-Assistant-v1.1.exe
 ├── README.md
 └── Screenshot.png
 ```
