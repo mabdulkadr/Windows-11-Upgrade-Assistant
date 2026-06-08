@@ -677,7 +677,7 @@ function Apply-Lang {
     if ($sbElevationLabel) { $sbElevationLabel.Text = "Elevation:" }
     if ($sbAboutTitle) { $sbAboutTitle.Text = "About this tool" }
     if ($sbAboutBody) { $sbAboutBody.Text = "Perform an in-place upgrade to Windows 11 while preserving files and applications." }
-    if ($sbFooterOrg) { $sbFooterOrg.Text = "Windows 11 Upgrade" }
+    if ($sbFooterOrg) { $sbFooterOrg.Text = "Qassim University - IT Operations" }
     if ($sbFooterVersion) { $sbFooterVersion.Text = ("Version {0}" -f $UiVersion) }
 
     if ($sessionElevationTxt) {
