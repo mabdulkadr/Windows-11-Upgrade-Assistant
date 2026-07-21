@@ -1,7 +1,6 @@
 ﻿<#!
 .SYNOPSIS
-    Launches a guided Windows 11 in-place upgrade from local installation media
-    (mounted ISO, USB stick, or extracted folder) using a modern WPF-based UI.
+    Windows 11 Upgrade Assistant - Guided in-place upgrade from local installation media.
 
 .DESCRIPTION
     Windows 11 Upgrade Assistant is a single-file PowerShell tool that helps
@@ -30,22 +29,17 @@
       * Background device-info collection on a dedicated MTA runspace so the
         UI thread never blocks on WMI/CIM calls.
 
+    Standard user is supported for browsing, mounting the ISO, and reviewing
+    the plan. Administrator rights are usually required by Windows Setup
+    itself when it actually runs; the assistant offers a RunAs prompt in that case.
+
     Exit codes:
       * 0 : The script completed normally or the UI was closed without error.
       * 1 : The script failed or could not continue (currently unused; failures
             inside the UI are surfaced via the status bar).
 
-.RUN AS
-    Standard user is supported for browsing, mounting the ISO, and reviewing
-    the plan. Administrator rights are usually required by Windows Setup
-    itself when it actually runs; the assistant offers a RunAs prompt in that
-    case.
-
 .EXAMPLE
     .\Windows-11-Upgrade-Assistant-v1.1.ps1
-
-    Opens the upgrade assistant UI. The user can select setup.exe or an ISO,
-    review the generated command, copy it, and start Windows Setup.
 
 .NOTES
     Author      : Mohammad Abdelkader Omar
@@ -113,9 +107,9 @@ $MinRamGB       = 8
 $MinDiskGB      = 30
 $RequireACPower = $true
 $UiVersion      = "1.1"
-#endregion ==============================================================
+#endregion ======================== SETTINGS ==========================
 
-#region ===================== ENVIRONMENT HELPERS ======================
+#region ======================== ENVIRONMENT HELPERS ======================
 
 <#
 .SYNOPSIS
@@ -153,9 +147,9 @@ function Start-SessionLog {
         Write-Host "Session log: $logFile"
     } catch {}
 }
-#endregion ==============================================================
+#endregion ======================== ENVIRONMENT HELPERS ====================
 
-#region ============================ DATA ================================
+#region ======================== DATA ==========================
 
 <#
 .SYNOPSIS
@@ -256,10 +250,8 @@ function Test-SetupExePath {
     if (!(Test-Path $Path))                  { return $false }
     return ([IO.Path]::GetFileName($Path).ToLower() -eq "setup.exe")
 }
-#endregion ==============================================================
-#endregion ==============================================================
-
-#region ============================= UI ================================
+#endregion ======================== DATA ==========================
+#region ======================== UI ============================
 
 # WPF requires an STA thread, and we also want a session transcript for
 # post-mortem analysis. Both helpers are no-ops when their preconditions
@@ -651,7 +643,7 @@ $xaml = @"
   </Grid>
 </Window>
 "@
-#endregion ==============================================================
+#endregion ======================== UI ==========================
 
 #region ========================= CONTROL REFS ==========================
 # ---------------------------------------------------------------------------
@@ -775,7 +767,7 @@ if ($tbSetupPath) {
     $script:SetupPathBorderDefault = $tbSetupPath.BorderBrush
     $script:SetupPathBgDefault     = $tbSetupPath.Background
 }
-#endregion ==============================================================
+#endregion ======================== CONTROL REFS =====================
 
 #region ============================ BINDINGS ===========================
 
@@ -1490,7 +1482,7 @@ function Start-BackgroundChecks {
     $script:BgTimer.Start()
 }
 
-#endregion ==============================================================
+#endregion ======================== BINDINGS ========================
 
 #region ============================= EVENTS ============================
 # ---------------------------------------------------------------------------
@@ -1672,7 +1664,7 @@ if ($ExtraArgsLink) {
     })
 }
 
-#endregion ==============================================================
+#endregion ======================== EVENTS ==========================
 
 #region ============================== ON LOAD ===========================
 # ---------------------------------------------------------------------------
@@ -1724,4 +1716,4 @@ $win.Add_Closed({
 
 $null = $win.ShowDialog()
 exit 0
-#endregion ==============================================================
+#endregion ======================== ON LOAD =========================
