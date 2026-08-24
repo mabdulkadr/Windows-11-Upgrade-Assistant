@@ -1,221 +1,193 @@
+<div align="center">
 
 # 🪟 Windows 11 Upgrade Assistant
 
+**Controlled in-place upgrades to Windows 11**
+
+Readiness checks, ISO handling, preset setup profiles, and a full command preview — apps, files, and settings preserved. Unsupported hardware? It can install Windows 11 anyway.
+
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
-![GUI](https://img.shields.io/badge/GUI-WPF-purple.svg)
+![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
+![Platform](https://img.shields.io/badge/Windows-10%2F11-blue.svg)
+![UI](https://img.shields.io/badge/UI-WPF%20GUI-blue.svg)
 ![Version](https://img.shields.io/badge/version-1.1-green.svg)
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-☕-FFDD00?style=for-the-badge)](https://www.buymeacoffee.com/mabdulkadrx)
+[Features](#-core-features) • [Usage](#-usage) • [Requirements](#️-requirements) • [Troubleshooting](#-troubleshooting)
+
+</div>
 
 ---
 
-## 📖 Overview
+# 📖 Overview
 
 **Windows 11 Upgrade Assistant** is a modern WPF-based PowerShell tool that helps any user run a controlled in-place upgrade to Windows 11 while preserving apps, files, and settings — and it can remove the restrictions that block installing Windows 11 on unsupported hardware. Old PC? No TPM, no Secure Boot, unsupported CPU? It lets you install Windows 11 anyway.
 
 It provides a clean workflow to:
 
-- Run quick **readiness checks** (RAM, Disk, AC power)
-- Validate **Windows setup media** by selecting `setup.exe` (USB / mounted ISO)
-- Mount an ISO and auto-detect `setup.exe`
-- Choose from safe **Setup Profiles** (preset command templates)
-- Preview the exact **Planned command** before execution
-- **Confirm and audit** the full setup.exe command in a dedicated dialog before launch
-- Launch Windows Setup with clear status feedback
-- Auto-dismount the ISO and clean up on window close
-- **Session transcript logging** to `%LOCALAPPDATA%\Win11UpgradeAssistant\Logs\`
+* Run quick **readiness checks** (RAM, Disk, AC power)
+* Validate **Windows setup media** by selecting `setup.exe` (USB / mounted ISO)
+* Mount an ISO and auto-detect `setup.exe`
+* Choose from safe **Setup Profiles** (preset command templates)
+* Preview the exact **planned command**, then **confirm and audit** it in a dedicated dialog before launch
+* Launch Windows Setup with clear status feedback
+* Auto-dismount the ISO and clean up on window close
+* **Session transcript logging** to `%LOCALAPPDATA%\Win11UpgradeAssistant\Logs\`
 
 ---
 
-## 🖥 Screenshot
+## 🖼️ Screenshots
 
-![Screenshot](Screenshot.png)
+![Windows 11 Upgrade Assistant main window — device details, readiness checks, media path, and setup profiles](Screenshot.png)
+
+*Main window: device & OS details, readiness pills, media validation, setup profile selection, and the planned command preview.*
 
 ---
 
-## ✨ Core Features
+# ✨ Core Features
 
-### 🔹 Welcome + Re-check
-- One-click **Re-check** to refresh device info and readiness
-- The background device-info scan runs on a dedicated MTA runspace, so the UI never freezes on slow WMI queries
+### 🔹 Device & Readiness
+* **Device & OS details** — Windows Edition (build-aware normalisation for 22000+), Version, Build (UBR), Install Date, hardware model
+* **Readiness checks** with pass/fail pills: **RAM** (min 8 GB), **Free Disk C:** (min 30 GB), **AC Power** (best-effort; desktops OK)
+* **One-click Re-check** — the device scan runs on a dedicated MTA runspace, so the UI never freezes on slow WMI queries
 
-### 🔹 Device & OS Details
-Displays:
-- Windows Edition (with build-aware normalisation for build 22000+ devices)
-- Version, Build (UBR), Install Date
-- Hardware model (Manufacturer / Model)
+### 🔹 Media Validation & ISO Actions
+* **Browse** to a valid `setup.exe` (filename enforced, field highlights green when valid) or **Clear** to reset
+* **Choose ISO** → mounts the image and auto-fills the `setup.exe` path
+* **Unmount ISO** → releases the drive letter after the upgrade
+* **Download ISO** → opens the official Microsoft Windows 11 download page
 
-### 🔹 Readiness Checks
-Visual checks with pass/fail pills:
-- **RAM** (Min 8 GB by default)
-- **Free Disk (C:)** (Min 30 GB by default)
-- **Power (AC)** (best-effort; desktops treated as OK)
-
-### 🔹 Windows Media Validation
-- **Browse** to a valid `setup.exe`
-- **Clear** to reset the current path
-- Enforces filename validation (`setup.exe` only)
-- Highlights the field green when valid
-
-### 🔹 ISO Actions
-- **Choose ISO** → mounts the ISO and automatically sets `setup.exe` path
-- **Unmount ISO** → releases the mounted image after the upgrade, freeing the drive letter
-- **Download ISO** → opens the official Microsoft Windows 11 download page
-
-### 🔹 Setup Profiles (Preset Arguments)
-Selectable upgrade templates:
-- **Option 1 – Basic** — Clean-style flow with driver migration
-- **Option 2 – Standard In-Place Upgrade (Default)** — Keeps data/apps + writes logs to `C:\WinSetup.log`
-- **Option 3 – Silent In-Place Upgrade** — Quiet mode, no OOBE, no reboot (depends on media/policy)
-
-### 🔹 Planned Command Preview
-Shows the exact command that will run:
-```
-<setup.exe path> <selected args> <extra args>
-```
-
-### 🔹 Extra Arguments (Optional)
-- Add custom Windows Setup switches
-- Includes an official docs link for reference
-
-### 🔹 Confirm Before Launch
-- A dedicated modal dialog displays the **full setup.exe command** before execution
-- Three options: **Launch**, **Copy** (clipboard), **Cancel**
-- The dialog auto-sizes to the message length and scrolls for unusually long commands
+### 🔹 Setup Profiles & Command Control
+* **Preset profiles:**
+  * **Option 1 – Basic** — clean-style flow with driver migration
+  * **Option 2 – Standard In-Place Upgrade (default)** — keeps data/apps, logs to `C:\WinSetup.log`
+  * **Option 3 – Silent In-Place Upgrade** — quiet mode, no OOBE, no reboot (media/policy dependent)
+* **Planned command preview** — shows the exact `<setup.exe> <args>` before anything runs
+* **Extra arguments** — optional custom Windows Setup switches, with an official docs link
+* **Confirm-before-launch dialog** — the full command, with **Launch / Copy / Cancel**
 
 ### 🔹 Safe Launch Behavior
-- If not running elevated, the tool offers a choice to run setup **as Administrator** (Yes / Continue / Cancel)
-- Clear status messages for common failures (missing file, blocked execution, access denied, UAC cancelled, AppLocker/Defender block)
-- Elevated and non-elevated sessions are clearly shown in the sidebar
+* If not elevated, the tool offers **Run as Administrator** (Yes / Continue / Cancel)
+* Clear status messages for common failures: missing file, blocked execution, access denied, UAC cancelled, AppLocker/Defender block
+* Elevation state clearly shown in the sidebar
 
 ### 🔹 Session Logging
-- Every run captures a `Start-Transcript` log to:
-```
+* Every run captures a `Start-Transcript` log:
+
+```text
 %LOCALAPPDATA%\Win11UpgradeAssistant\Logs\Session_yyyyMMdd_HHmmss.log
 ```
-- The transcript is closed cleanly when the window is closed
-- ISO is automatically dismounted on exit so the drive letter is released even if the operator forgets
+
+* The transcript closes cleanly on window close, and the ISO is auto-dismounted on exit
 
 ---
 
-## ⚙️ Requirements
+# 🚀 Usage
 
-### System
-- Windows 10 / 11
-- Windows PowerShell 5.1 (PowerShell 7+ also works)
-- ISO mounting supported (Windows built-in)
+### Launch
 
-### Permissions
-- Standard user can open the UI and browse media
-- **Administrator** recommended for launching `setup.exe` reliably
-- The UI detects the elevation state and shows it in the sidebar
-
----
-
-## 🚀 How to Run
-
-### Option 1 — PowerShell Script
+**Option 1 — PowerShell script:**
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Windows-11-Upgrade-Assistant-v1.1.ps1
 ```
 
-### Option 2 — Packaged EXE (Self-Signed with PSWrap)
+**Option 2 — Packaged EXE (self-signed with PSWrap):**
 
-The `.exe` was compiled and self-signed using [PSWrap](https://github.com/mabdulkadr/PSWrap) — a PowerShell Script to EXE Compiler with built-in code signing support.
-
-```
+```text
 Windows-11-Upgrade-Assistant-v1.1.exe
 ```
 
-No PowerShell console required.
+The `.exe` was compiled and self-signed using [PSWrap](https://github.com/mabdulkadr/PSWrap) — no PowerShell console required.
 
----
-
-## 🔄 Typical Workflow
+### Typical Workflow
 
 1. Launch the tool
-2. Review **Device & OS Details** + **Readiness Checks** in the right panel
-3. Click **Browse** and select `setup.exe` from mounted ISO or USB Windows installation media
-4. (Optional) Click **Choose ISO** → auto-mount and fill the `setup.exe` path
-5. (Optional) Click **Clear** to reset the path
-6. Select the desired **Setup option** preset
-7. (Optional) add **Extra arguments**
-8. Verify the **Planned command** preview
-9. Click **Start Upgrade**
-10. A confirmation dialog appears — review the full command and choose **Launch**, **Copy**, or **Cancel**
-11. (Optional) After the upgrade, click **Unmount ISO** to release the mounted image
-12. Close the window — the ISO is auto-dismounted and the session log is finalised
+2. Review **Device & OS Details** + **Readiness Checks**
+3. **Browse** and select `setup.exe` from mounted ISO or USB media (or **Choose ISO** to auto-mount)
+4. Select the desired **Setup profile** preset
+5. *(Optional)* add **Extra arguments**
+6. Verify the **Planned command** preview
+7. Click **Start Upgrade** → review the full command in the confirmation dialog → **Launch** / **Copy** / **Cancel**
+8. *(Optional)* **Unmount ISO** after the upgrade; closing the window auto-dismounts and finalises the log
 
 ---
 
-## 🛡 Operational Notes
+# ⚙️ Requirements
 
-- Presets may include switches like `/Product server` and `/compat IgnoreWarning`
-- Use relaxed compatibility options only if approved by organizational policy
-- Always test on pilot devices before broad rollout
-- Ensure your Windows media matches target language/edition requirements
-- Session logs are written **unencrypted** to a per-user folder; do not include secrets in the Extra Arguments field
-- The background runspace runs as **MTA** — this is intentional, since WMI/CIM is faster on MTA and the UI thread is STA
+| Requirement | Details |
+|-------------|---------|
+| **OS** | Windows 10 / 11 |
+| **PowerShell** | Windows PowerShell 5.1 (7+ also works) |
+| **ISO mounting** | Windows built-in |
+| **Permissions** | Standard user can open the UI and browse media; **Administrator** recommended for launching `setup.exe` reliably (elevation state shown in the sidebar) |
 
----
+### Files & Logs
 
-## 🐛 Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| "Checks failed" pill stays red | WMI service disabled or running without admin | Enable `Winmgmt` and re-run elevated |
-| ISO mounts but no `setup.exe` path is filled | ISO is not a Windows installation media | Use a different ISO |
-| "Access denied" on launch | Standard user without UAC bypass | Click **Run as admin** in the elevation prompt |
-| UI freezes when scanning | Fixed in v1.0.5+ via MTA runspace | Update to v1.1 |
-
----
-
-## 📁 Folder Structure
-
-Recommended structure for packaging:
-
-```
+```text
 Windows-11-Upgrade-Assistant\
 ├── Windows-11-Upgrade-Assistant-v1.1.ps1
 ├── Windows-11-Upgrade-Assistant-v1.1.exe
 ├── README.md
 └── Screenshot.png
-```
 
-Session transcript logs are written to:
-```
 %LOCALAPPDATA%\Win11UpgradeAssistant\Logs\Session_<timestamp>.log
 ```
 
 ---
 
-## 📜 License
+# 🔍 Troubleshooting
 
-This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| "Checks failed" pill stays red | WMI service disabled or running without admin | Enable `Winmgmt` and re-run elevated |
+| ISO mounts but no `setup.exe` path filled | ISO is not Windows installation media | Use a different ISO |
+| "Access denied" on launch | Standard user without UAC bypass | Click **Run as admin** in the elevation prompt |
+| UI freezes when scanning | Fixed in v1.0.5+ via MTA runspace | Update to v1.1 |
+
+---
+
+# 🛡 Operational Notes
+
+* Presets may include switches like `/Product server` and `/compat IgnoreWarning` — use relaxed compatibility options only if approved by organizational policy
+* Always test on **pilot devices** before broad rollout
+* Ensure your Windows media matches target language/edition requirements
+* Session logs are written **unencrypted** to a per-user folder — do not include secrets in the Extra Arguments field
+* The background runspace runs as **MTA** intentionally: WMI/CIM is faster on MTA and the UI thread stays STA
 
 ---
 
 ## 👤 Author
 
-**Mohammad Abdulkader Omar**
-Website: https://momar.tech
-LinkedIn: https://www.linkedin.com/in/mabdulkadr/
-Version: **1.1**
+**Mohammad Abdulkader Omar**  
+GitHub: [@mabdulkadr](https://github.com/mabdulkadr)  
+Website: [momar.tech](https://momar.tech)  
 
 ---
 
-## ☕ Support
+## 📜 License
 
-If this project helps you, consider supporting it:
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-☕-FFDD00?style=for-the-badge)](https://www.buymeacoffee.com/mabdulkadrx)
+This project is licensed under the [MIT License](LICENSE).
 
 ---
 
 ## ⚠ Disclaimer
 
-These scripts are provided as-is. Test them in a staging environment before applying them to production. The author is not responsible for any unintended outcomes resulting from their use.
+This skill and every script it generates are provided as-is with no warranty
+of any kind. Test generated tools in a staging environment before deploying to
+production. The authors assume no liability for any damage or data loss
+resulting from their use.
+
+---
+
+<div align="center">
+
+⭐ **If this tool saves you time, star the repo — it helps others find it.**
+
+[Report an Issue](../../issues) · [momar.tech](https://momar.tech)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
+
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+
+</div>
