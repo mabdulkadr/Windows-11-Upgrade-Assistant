@@ -1,4 +1,4 @@
-﻿<#!
+﻿<#
 .SYNOPSIS
     Windows 11 Upgrade Assistant - Guided in-place upgrade from local installation media.
 
